@@ -167,6 +167,17 @@ func decode(_ layout: PenLayout, _ report: [UInt8]) -> PenSample {
         #expect(e.contains { if case .move(_, held: 1) = $0 { true } else { false } })
     }
 
+    @Test func tipSwitchEndsAStuckPress() {
+        // Nib lifted, but it still reports pressure above the release threshold.
+        var p = PenProcessor()
+        let e = run(&p, [
+            (PenSample(x: 0.5, y: 0.5, pressure: 0.3, tipSwitch: true, hasTipSwitch: true), 0),
+            (PenSample(x: 0.5, y: 0.5, pressure: 0.2, tipSwitch: false, hasTipSwitch: true), 10),
+        ])
+        #expect(ups(e).count == 1)
+        #expect(!p.isTouching)
+    }
+
     @Test func doubleTapSnapsAndCounts() {
         var p = PenProcessor()
         let e = run(&p, [

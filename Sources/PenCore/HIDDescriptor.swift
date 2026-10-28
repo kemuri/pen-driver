@@ -77,6 +77,7 @@ public struct PenLayout: Sendable {
             y: y.normalized(p, length),
             pressure: pressure.map { $0.normalized(p, length) } ?? -1,
             tipSwitch: bit(tipSwitch) || bit(eraser),
+            hasTipSwitch: tipSwitch != nil || eraser != nil,
             inRange: inRange.map { $0.read(p, length) != 0 } ?? true,
             barrel: bit(barrel),
             secondaryBarrel: bit(secondaryBarrel),

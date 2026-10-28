@@ -8,6 +8,8 @@ public struct PenSample: Equatable, Sendable {
     /// 0...1, or -1 if the device reports no pressure.
     public var pressure: Double
     public var tipSwitch: Bool
+    /// The device reports a tip switch, so `tipSwitch == false` reliably means the nib is up.
+    public var hasTipSwitch: Bool
     public var inRange: Bool
     /// Lower side button.
     public var barrel: Bool
@@ -16,9 +18,10 @@ public struct PenSample: Equatable, Sendable {
     /// The eraser end is the one near the tablet.
     public var eraser: Bool
 
-    public init(x: Double, y: Double, pressure: Double = 0, tipSwitch: Bool = false, inRange: Bool = true,
-                barrel: Bool = false, secondaryBarrel: Bool = false, eraser: Bool = false) {
-        self.x = x; self.y = y; self.pressure = pressure; self.tipSwitch = tipSwitch; self.inRange = inRange
+    public init(x: Double, y: Double, pressure: Double = 0, tipSwitch: Bool = false, hasTipSwitch: Bool = false,
+                inRange: Bool = true, barrel: Bool = false, secondaryBarrel: Bool = false, eraser: Bool = false) {
+        self.x = x; self.y = y; self.pressure = pressure; self.tipSwitch = tipSwitch; self.hasTipSwitch = hasTipSwitch
+        self.inRange = inRange
         self.barrel = barrel; self.secondaryBarrel = secondaryBarrel; self.eraser = eraser
     }
 }
@@ -163,8 +166,10 @@ public struct PenProcessor {
 
         let pressed: Bool
         if s.pressure >= 0 {
-            // Hysteresis so pressure hovering around the threshold doesn't chatter.
+            // Hysteresis so pressure hovering around the threshold doesn't chatter. A worn nib can
+            // keep reporting some pressure after it lifts; the tablet's own tip switch still says it's up.
             pressed = s.pressure >= (contact == nil ? c.tipThreshold : max(c.tipThreshold * 0.75, 0.002))
+                && (s.tipSwitch || !s.hasTipSwitch)
         } else {
             pressed = s.tipSwitch
         }
