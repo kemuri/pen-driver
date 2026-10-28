@@ -255,7 +255,8 @@ final class AppModel {
         c.target = targetLayoutRect
         c.segments = mappedDisplays.map { DisplaySegment(layout: layoutFrame($0), screen: $0.frame) }
         c.tipThreshold = settings.tipThreshold
-        c.tapRadius = settings.tapStability
+        c.tapRadius = settings.tapStability / 10  // slider 0...20 → 0...2 mm
+        c.tabletMM = tabletSizeMM
         c.doubleClickNs = UInt64(NSEvent.doubleClickInterval * 1_000_000_000)
         c.upper = settings.upper
         c.lower = settings.lower

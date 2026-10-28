@@ -76,8 +76,11 @@ public struct PenConfig: Equatable, Sendable {
     public var segments: [DisplaySegment] = []
     /// Pressure (0...1) needed to press the tip.
     public var tipThreshold = 0.10
-    /// Click guard: how far (points) the pen may wobble after touching down before it becomes a drag. 0 = off.
-    public var tapRadius = 7.0
+    /// Click guard: how far (millimetres on the tablet) the pen may wobble after touching down before it
+    /// becomes a drag. Measured on the tablet so it holds however small the area or large the screens. 0 = off.
+    public var tapRadius = 0.7
+    /// Physical size of the whole tablet surface, to turn pointer movement back into millimetres.
+    public var tabletMM = CGSize(width: 224, height: 148)
     /// Right after touchdown the pen wobbles most, so the radius is larger for this long.
     public var tapGraceNs: UInt64 = 150_000_000
     public var doubleClickNs: UInt64 = 500_000_000
@@ -156,6 +159,7 @@ public struct PenProcessor {
     public mutating func process(_ s: PenSample, config c: PenConfig, now: UInt64, emit: (PenEvent) -> Void) {
         guard s.inRange else { releaseAll(emit: emit); return }
         let p = Self.map(s, c)
+        let k = Self.pointsPerMM(c)
 
         let pressed: Bool
         if s.pressure >= 0 {
@@ -178,7 +182,7 @@ public struct PenProcessor {
         if contact != nil {
             if pinned {
                 let radius = now &- downTime < c.tapGraceNs ? c.tapRadius * 2.5 : c.tapRadius
-                if distance(p, anchor) > radius { pinned = false }
+                if Self.mm(p, anchor, k) > radius { pinned = false }
             }
             moveTo(pinned ? anchor : p, emit)
         } else if !pressed {
@@ -194,7 +198,7 @@ public struct PenProcessor {
             let snap = c.tapRadius * 2.5
             if snap > 0, let mb = action.mouseButton {
                 let last = clicks[mb]
-                if last.count > 0, now &- last.time <= c.doubleClickNs, distance(p, last.point) <= snap { point = last.point }
+                if last.count > 0, now &- last.time <= c.doubleClickNs, Self.mm(p, last.point, k) <= snap { point = last.point }
             }
             moveTo(point, emit)
             contact = src
@@ -242,7 +246,7 @@ public struct PenProcessor {
         held |= 1 << UInt8(mb)
         let at = cursor ?? anchor
         let last = clicks[mb]
-        let nearby = distance(at, last.point) <= max(6, c.tapRadius * 2.5)
+        let nearby = Self.mm(at, last.point, Self.pointsPerMM(c)) <= max(0.5, c.tapRadius * 2.5)
         let count = last.count > 0 && now &- last.time <= c.doubleClickNs && nearby ? last.count + 1 : 1
         clicks[mb] = ClickRecord(time: now, point: at, count: count)
         emit(.down(button: mb, at: at, clicks: count, held: held))
@@ -262,8 +266,15 @@ public struct PenProcessor {
         emit(.move(point, held: held))
     }
 
-    private func distance(_ a: CGPoint, _ b: CGPoint) -> Double {
-        let dx = a.x - b.x, dy = a.y - b.y
+    /// Screen points per millimetre of pen travel, per axis (they differ without proportions).
+    static func pointsPerMM(_ c: PenConfig) -> CGSize {
+        CGSize(width: max(c.target.width - 1, 1) / max(c.area.width * c.tabletMM.width, 1e-6),
+               height: max(c.target.height - 1, 1) / max(c.area.height * c.tabletMM.height, 1e-6))
+    }
+
+    /// Distance between two screen points as pen travel on the tablet, in millimetres.
+    private static func mm(_ a: CGPoint, _ b: CGPoint, _ k: CGSize) -> Double {
+        let dx = (a.x - b.x) / k.width, dy = (a.y - b.y) / k.height
         return (dx * dx + dy * dy).squareRoot()
     }
 }

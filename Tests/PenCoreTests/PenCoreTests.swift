@@ -89,6 +89,7 @@ func decode(_ layout: PenLayout, _ report: [UInt8]) -> PenSample {
     var config: PenConfig = {
         var c = PenConfig()
         c.target = CGRect(x: 0, y: 0, width: 1001, height: 1001)  // 1 normalized unit = 1000 pt
+        c.tabletMM = CGSize(width: 1000, height: 1000)  // so 1 mm of pen travel = 1 pt
         c.tapRadius = 5
         c.tipThreshold = 0.1
         return c
@@ -147,6 +148,23 @@ func decode(_ layout: PenLayout, _ report: [UInt8]) -> PenSample {
         #expect(!e.contains(.move(CGPoint(x: 510, y: 500), held: 1)))
         e = run(&p, [(PenSample(x: 0.51, y: 0.5, pressure: 0.3), 160)])
         #expect(e == [.move(CGPoint(x: 510, y: 500), held: 1)])
+    }
+
+    @Test func radiusIsMeasuredOnTheTablet() {
+        // Two 5K displays side by side: 0.5 mm of wobble is ~11 pt on screen but still a click.
+        var c = config
+        c.target = CGRect(x: 0, y: 0, width: 5121, height: 1441)
+        c.tabletMM = CGSize(width: 224, height: 148)
+        c.tapRadius = 0.7
+        var p = PenProcessor()
+        let wobble = 0.5 / 224
+        var e = run(&p, [
+            (PenSample(x: 0.5, y: 0.5, pressure: 0.3), 0),
+            (PenSample(x: 0.5 + wobble, y: 0.5, pressure: 0.3), 200),
+        ], config: c)
+        #expect(!e.contains { if case .move(_, held: 1) = $0 { true } else { false } })
+        e = run(&p, [(PenSample(x: 0.5 + 3 * wobble, y: 0.5, pressure: 0.3), 210)], config: c)
+        #expect(e.contains { if case .move(_, held: 1) = $0 { true } else { false } })
     }
 
     @Test func doubleTapSnapsAndCounts() {
