@@ -4,6 +4,12 @@ A minimal, native macOS driver for Wacom and XP-Pen tablets: area mapping across
 displays, click guard (tap stability), and pen button mapping. Written as a low-latency
 replacement for OpenTabletDriver, whose cursor lags when the system is under heavy load.
 
+## Install
+
+Download the latest `PenDriver-<version>.dmg` from
+[Releases](https://github.com/kemuri/pen-driver/releases), open it and drag Pen Driver to
+Applications. It's signed with a Developer ID and notarized by Apple.
+
 ## Build
 
     ./build.sh             # → build/Pen Driver.app
@@ -14,20 +20,36 @@ Requires macOS 15+ and Xcode. `build.sh` signs with your Developer ID / Apple De
 certificate if one is installed (a stable signature keeps the permission grants across
 rebuilds), otherwise ad-hoc. Set `PEN_DRIVER_IDENTITY` to choose one.
 
+## Release
+
+    Scripts/release.sh                # → build/PenDriver-<version>.dmg, notarized and stapled
+    Scripts/release.sh --publish      # also creates a draft GitHub release v<version> with it
+    Scripts/release.sh --no-notarize  # just build and package, to check locally
+
+The version comes from `CFBundleShortVersionString` in `Resources/Info.plist`. The build is
+universal (Apple silicon and Intel), signed with Developer ID and the hardened runtime. Store
+notarization credentials once with
+`xcrun notarytool store-credentials pen-driver --apple-id <apple-id> --team-id <team-id>`
+(set `PEN_DRIVER_NOTARY_PROFILE` to use another profile name).
+
 On first launch, allow **Input Monitoring** (to read the tablet) and **Accessibility** (to move
 the pointer). If OpenTabletDriver is running, quit it (the Tablet pane offers a button). Existing
 OpenTabletDriver settings (buttons, tip threshold, left-handed, display) are imported on first run.
 
 ## Features
 
-- **Mapping:** map to the main display, any single display, or all displays. The screen preview
-  shows your displays at their real proportions with the live pen position. Drag displays to
-  arrange how the tablet spans them; this doesn't touch the macOS arrangement. The tablet preview
-  draws the mapped displays inside the active area.
+- **Mapping:** map to the main display, any single display, or all displays. One preview shows
+  the tablet with its active area, the mapped displays inside it and the live pen position. When
+  mapping to all displays, "Arrange…" lets you drag displays to set how the tablet spans them;
+  this doesn't touch the macOS arrangement.
 - **Keep proportions:** the active area takes the screens' shape so circles stay round. The free
   and proportional areas are remembered separately, so switching back restores your old area.
-- **Click guard:** after touchdown the pointer stays put until the pen clearly moves, so taps
-  don't turn into tiny drags; the second tap of a double-click lands on the first.
+- **Click guard:** after touchdown the pointer stays put until the pen clearly moves (measured in
+  millimetres on the tablet, so it holds on large screens), so taps don't turn into tiny drags;
+  the second tap of a double-click lands on the first.
+- **Screen edges:** past the edge of the area the pointer rests on the screen edge, ignoring hover
+  jitter, so a hidden Dock and hot corners work as with a mouse.
+- **Modifier keys** (⌘-click, ⇧-click, ⌥-drag) are read from the keyboard itself.
 - **Pen buttons, eraser, tip pressure threshold**, left-handed (rotated 180°) use.
 - Lives in the menu bar (can be hidden; open the app again to get the settings window).
 
