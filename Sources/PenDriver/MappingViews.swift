@@ -1,8 +1,7 @@
 import PenCore
 import SwiftUI
 
-/// All displays as arranged for the tablet, at their real proportions. Mapped displays are
-/// highlighted; click one to map to it, drag to rearrange.
+/// All displays as arranged for the tablet, at their real proportions. Drag one to rearrange.
 struct DisplayMapView: View {
     @Bindable var model: AppModel
 
@@ -40,9 +39,6 @@ struct DisplayMapView: View {
                             .frame(width: r.width, height: r.height)
                             .position(x: r.midX, y: r.midY)
                             .zIndex(drag?.id == display.id ? 1 : 0)
-                            .onTapGesture {
-                                if model.displays.count > 1 { model.settings.display = display.id }
-                            }
                             .gesture(model.displays.count > 1 ? dragGesture(display, union: union, scale: scale) : nil)
                     }
 
@@ -170,7 +166,7 @@ struct TabletSurface: View {
                                    height: f.height / target.height * rect.height).insetBy(dx: 1.5, dy: 1.5)
                     RoundedRectangle(cornerRadius: 3, style: .continuous)
                         .fill(Color.accentColor.opacity(0.14))
-                        .overlay(Text(model.mappedDisplays.count > 1 ? display.name : "")
+                        .overlay(Text(display.name)
                             .font(.caption2).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.6).padding(4))
                         .frame(width: max(r.width, 0), height: max(r.height, 0))
                         .position(x: r.midX, y: r.midY)
@@ -233,16 +229,16 @@ struct TabletSurface: View {
             .onChanged { value in
                 let start = dragStart ?? model.effectiveArea
                 dragStart = start
+                // Horizontally the opposite corner stays put; vertically the area stays centred on the tablet.
                 let anchor = corner.opposite.point(in: start)
                 let p = CGPoint(x: min(max(value.location.x / size.width, 0), 1),
                                 y: min(max(value.location.y / size.height, 0), 1))
                 let dirX: CGFloat = p.x >= anchor.x ? 1 : -1
-                let dirY: CGFloat = p.y >= anchor.y ? 1 : -1
                 let maxW = dirX > 0 ? 1 - anchor.x : anchor.x
-                let maxH = dirY > 0 ? 1 - anchor.y : anchor.y
+                let maxH = 1.0
                 let minSide = 0.1
                 var w = max(abs(p.x - anchor.x), minSide)
-                var h = max(abs(p.y - anchor.y), minSide)
+                var h = max(abs(p.y - 0.5) * 2, minSide)
                 if model.settings.keepProportions {
                     let k = model.proportionalAspect
                     if w / h > k { h = w / k } else { w = h * k }
@@ -252,8 +248,7 @@ struct TabletSurface: View {
                     w = min(w, maxW)
                     h = min(h, maxH)
                 }
-                model.setArea(CGRect(x: dirX > 0 ? anchor.x : anchor.x - w, y: dirY > 0 ? anchor.y : anchor.y - h,
-                                     width: w, height: h))
+                model.setArea(CGRect(x: dirX > 0 ? anchor.x : anchor.x - w, y: 0.5 - h / 2, width: w, height: h))
             }
             .onEnded { _ in dragStart = nil }
     }

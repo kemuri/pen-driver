@@ -20,16 +20,7 @@ enum Pane: String, CaseIterable, Identifiable {
         case .tablet: "pencil.and.scribble"
         case .mapping: "display.2"
         case .pen: "pencil.tip"
-        case .general: "gearshape.fill"
-        }
-    }
-
-    var tint: Color {
-        switch self {
-        case .tablet: .indigo
-        case .mapping: .blue
-        case .pen: .orange
-        case .general: .gray
+        case .general: "gearshape"
         }
     }
 }
@@ -46,8 +37,12 @@ struct SettingsView: View {
                     .padding(.vertical, 6)
                 Section {
                     ForEach([Pane.mapping, .pen, .general]) { pane in
-                        Label { Text(pane.title) } icon: { IconTile(symbol: pane.symbol, tint: pane.tint) }
-                            .tag(pane)
+                        // Not a Label: the sidebar restyles label icons, which would undo the tile look.
+                        HStack(spacing: 8) {
+                            IconTile(symbol: pane.symbol)
+                            Text(pane.title)
+                        }
+                        .tag(pane)
                     }
                 }
             }
@@ -79,11 +74,9 @@ private struct TabletStatusRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            ZStack {
-                Circle().fill(LinearGradient(colors: [.indigo, .blue], startPoint: .top, endPoint: .bottom))
-                Image(systemName: "pencil.and.scribble").font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
-            }
-            .frame(width: 34, height: 34)
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .frame(width: 36, height: 36)
             VStack(alignment: .leading, spacing: 1) {
                 Text(model.tablet?.name ?? "No Tablet").font(.headline).lineLimit(1)
                 HStack(spacing: 4) {
@@ -107,16 +100,27 @@ private struct TabletStatusRow: View {
     }
 }
 
+/// A monochrome glyph on a neutral tile, like the System Settings sidebar.
 struct IconTile: View {
     let symbol: String
-    let tint: Color
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
+        let dark = colorScheme == .dark
+        let tile = RoundedRectangle(cornerRadius: 6, style: .continuous)
         Image(systemName: symbol)
-            .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(.white)
-            .frame(width: 20, height: 20)
-            .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(tint.gradient))
+            .resizable()
+            .scaledToFit()
+            .fontWeight(.medium)
+            .foregroundStyle(Color(nsColor: .labelColor))
+            .frame(width: 13, height: 13)
+            .frame(width: 22, height: 22)
+            .background {
+                tile.fill(dark ? Color.white.opacity(0.07) : Color.white)
+                    .overlay(tile.strokeBorder(LinearGradient(colors: [.white.opacity(dark ? 0.16 : 0), .white.opacity(dark ? 0.03 : 0)],
+                                                              startPoint: .top, endPoint: .bottom), lineWidth: 0.5))
+                    .shadow(color: .black.opacity(dark ? 0.3 : 0.15), radius: 0.5, y: 0.5)
+            }
     }
 }
 
@@ -195,40 +199,16 @@ private struct Notices: View {
 
 private struct MappingPane: View {
     @Bindable var model: AppModel
+    @State private var arranging = false
 
     var body: some View {
         Form {
             Section {
-                DisplayMapView(model: model)
-                    .padding(.vertical, 6)
-            } header: {
-                Text("Screen")
-            } footer: {
-                HStack(alignment: .firstTextBaseline) {
-                    FooterText(model.displays.count > 1
-                        ? "Click a display to map the tablet to it. Drag displays to arrange how the tablet spans them; this doesn’t change your macOS arrangement."
-                        : "The tablet’s active area covers this display.")
-                    if model.isLayoutCustomized {
-                        Button("Use macOS Arrangement") { model.resetLayout() }
-                            .controlSize(.small)
-                    }
-                }
-            }
-
-            Section {
                 TabletSurface(model: model)
                     .aspectRatio(model.tabletSizeMM.width / model.tabletSizeMM.height, contentMode: .fit)
-                    .frame(maxHeight: 220)
+                    .frame(maxHeight: 260)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 6)
-            } header: {
-                Text(model.tablet?.name ?? "Tablet")
-            } footer: {
-                let mm = model.activeAreaMM
-                FooterText(String(format: "Active area %.0f × %.0f mm. Drag it to move, drag a corner to resize, double-click to reset.", mm.width, mm.height))
-            }
-
-            Section {
                 Picker("Map tablet to", selection: $model.settings.display) {
                     Text("Main display (with the menu bar)").tag("main")
                     if model.displays.count > 1 {
@@ -236,6 +216,20 @@ private struct MappingPane: View {
                         Text("All displays").tag("all")
                     }
                 }
+                if model.displays.count > 1, model.settings.display == "all" {
+                    LabeledContent("Display arrangement") {
+                        Button("Arrange…") { arranging = true }
+                            .popover(isPresented: $arranging, arrowEdge: .bottom) { ArrangeDisplays(model: model) }
+                    }
+                }
+            } header: {
+                Text(model.tablet?.name ?? "Tablet")
+            } footer: {
+                let mm = model.activeAreaMM
+                FooterText(String(format: "The dashed box is the active area (%.0f × %.0f mm) and shows where each screen lands. Drag it to move, drag a corner to resize, double-click to reset.", mm.width, mm.height))
+            }
+
+            Section {
                 Toggle("Keep proportions (circles stay round)", isOn: $model.settings.keepProportions)
                 Toggle("Left-handed (tablet turned around)", isOn: $model.settings.leftHanded)
             } footer: {
@@ -244,6 +238,26 @@ private struct MappingPane: View {
                 }
             }
         }
+    }
+}
+
+private struct ArrangeDisplays: View {
+    @Bindable var model: AppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Arrange Displays").font(.headline)
+            DisplayMapView(model: model)
+            Text("Drag displays to set how the tablet spans them. This doesn’t change your macOS arrangement.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if model.isLayoutCustomized {
+                Button("Use macOS Arrangement") { model.resetLayout() }
+            }
+        }
+        .padding(16)
+        .frame(width: 380)
     }
 }
 
