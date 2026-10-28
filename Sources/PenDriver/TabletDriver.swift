@@ -100,6 +100,7 @@ final class TabletDriver: @unchecked Sendable {
             Realtime.promoteCurrentThread()
             runLoop = CFRunLoopGetCurrent()
             setUpManager()
+            output.modifiers.start()
             ready.signal()
             CFRunLoopRun()
         }
@@ -259,34 +260,38 @@ final class TabletDriver: @unchecked Sendable {
 /// Posts pointer events into the HID event stream, like a real mouse.
 final class EventOutput {
     private let source = CGEventSource(stateID: .hidSystemState)
+    let modifiers = KeyboardModifiers()
     private var last: CGPoint?
 
     func post(_ event: PenEvent) {
         let cg: CGEvent?
         switch event {
         case let .move(p, held):
-            let type: CGEventType, button: Int
-            if held & 1 != 0 { (type, button) = (.leftMouseDragged, 0) }
-            else if held & 2 != 0 { (type, button) = (.rightMouseDragged, 1) }
-            else if held != 0 { (type, button) = (.otherMouseDragged, held.trailingZeroBitCount) }
-            else { (type, button) = (.mouseMoved, 0) }
-            cg = make(type, p, button)
-            if let last {
-                cg?.setIntegerValueField(.mouseEventDeltaX, value: Int64((p.x - last.x).rounded()))
-                cg?.setIntegerValueField(.mouseEventDeltaY, value: Int64((p.y - last.y).rounded()))
-            }
-            if held != 0 { cg?.flags = CGEventSource.flagsState(.hidSystemState) }
+            cg = move(p, held, delta: last.map { CGVector(dx: p.x - $0.x, dy: p.y - $0.y) })
             last = p
         case let .down(button, p, clicks, _):
             cg = make(button == 0 ? .leftMouseDown : button == 1 ? .rightMouseDown : .otherMouseDown, p, button)
             cg?.setIntegerValueField(.mouseEventClickState, value: Int64(clicks))
-            cg?.flags = CGEventSource.flagsState(.hidSystemState)
         case let .up(button, p, clicks, _):
             cg = make(button == 0 ? .leftMouseUp : button == 1 ? .rightMouseUp : .otherMouseUp, p, button)
             cg?.setIntegerValueField(.mouseEventClickState, value: Int64(clicks))
-            cg?.flags = CGEventSource.flagsState(.hidSystemState)
         }
+        cg?.flags = modifiers.flags
         cg?.post(tap: .cghidEventTap)
+    }
+
+    private func move(_ p: CGPoint, _ held: UInt8, delta: CGVector?) -> CGEvent? {
+        let type: CGEventType, button: Int
+        if held & 1 != 0 { (type, button) = (.leftMouseDragged, 0) }
+        else if held & 2 != 0 { (type, button) = (.rightMouseDragged, 1) }
+        else if held != 0 { (type, button) = (.otherMouseDragged, held.trailingZeroBitCount) }
+        else { (type, button) = (.mouseMoved, 0) }
+        let cg = make(type, p, button)
+        if let delta {
+            cg?.setIntegerValueField(.mouseEventDeltaX, value: Int64(delta.dx.rounded()))
+            cg?.setIntegerValueField(.mouseEventDeltaY, value: Int64(delta.dy.rounded()))
+        }
+        return cg
     }
 
     private func make(_ type: CGEventType, _ p: CGPoint, _ button: Int) -> CGEvent? {
