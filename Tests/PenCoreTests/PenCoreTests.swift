@@ -178,6 +178,70 @@ func decode(_ layout: PenLayout, _ report: [UInt8]) -> PenSample {
         #expect(!p.isTouching)
     }
 
+    @Test func restsOnTheEdge() {
+        var c = config
+        c.area = CGRect(x: 0, y: 0, width: 1, height: 0.5)  // bottom half of the tablet is past the edge
+        var p = PenProcessor()
+        let e = run(&p, [
+            (PenSample(x: 0.5, y: 0.4), 0),
+            (PenSample(x: 0.5, y: 0.6), 10),     // past the bottom edge: pointer lands on it
+            (PenSample(x: 0.503, y: 0.62), 20),  // 3 pt sideways (1 mm = 1 pt here): past the 0.5 mm dead zone, trails it
+        ], config: c)
+        #expect(e == [.move(CGPoint(x: 500, y: 800), held: 0), .move(CGPoint(x: 500, y: 1000), held: 0),
+                      .move(CGPoint(x: 502.5, y: 1000), held: 0)])
+    }
+
+    @Test func edgeIgnoresSidewaysJitter() {
+        var c = config
+        c.area = CGRect(x: 0, y: 0, width: 1, height: 0.5)
+        c.edgeRestMM = 5  // 5 pt here
+        var p = PenProcessor()
+        var e = run(&p, [
+            (PenSample(x: 0.5, y: 0.6), 0),
+            (PenSample(x: 0.503, y: 0.61), 10),
+            (PenSample(x: 0.497, y: 0.605), 20),
+            (PenSample(x: 0.5, y: 0.7), 30),
+        ], config: c)
+        #expect(e == [.move(CGPoint(x: 500, y: 1000), held: 0)])  // at rest on the edge
+        e = run(&p, [(PenSample(x: 0.52, y: 0.6), 40)], config: c)  // a real move along the edge
+        #expect(e == [.move(CGPoint(x: 515, y: 1000), held: 0)])
+        e = run(&p, [(PenSample(x: 0.52, y: 0.4), 50)], config: c)  // back inside: exact again
+        #expect(e == [.move(CGPoint(x: 520, y: 800), held: 0)])
+    }
+
+    @Test func sideEdgesAndCornersRestToo() {
+        var c = config
+        c.area = CGRect(x: 0.25, y: 0.25, width: 0.5, height: 0.5)
+        c.edgeRestMM = 5
+        var p = PenProcessor()
+        var e = run(&p, [
+            (PenSample(x: 0.8, y: 0.5), 0),      // past the right edge
+            (PenSample(x: 0.85, y: 0.502), 10),  // jitter up and down the edge
+            (PenSample(x: 0.82, y: 0.498), 20),
+        ], config: c)
+        #expect(e == [.move(CGPoint(x: 1000, y: 500), held: 0)])
+        e = run(&p, [
+            (PenSample(x: 0.1, y: 0.1), 30),     // past the top-left corner (a hot corner)
+            (PenSample(x: 0.12, y: 0.08), 40),
+        ], config: c)
+        #expect(e == [.move(CGPoint(x: 0, y: 0), held: 0)])
+    }
+
+    @Test func displayEdgeInsideTheAreaRestsToo() {
+        // Two displays, the right one 13 pt higher: below it the pen is still in the area.
+        var c = config
+        c.edgeRestMM = 5
+        c.target = CGRect(x: 0, y: 0, width: 2000, height: 1013)
+        c.segments = [DisplaySegment(layout: CGRect(x: 0, y: 13, width: 1000, height: 1000), screen: CGRect(x: -1000, y: 13, width: 1000, height: 1000)),
+                      DisplaySegment(layout: CGRect(x: 1000, y: 0, width: 1000, height: 1000), screen: CGRect(x: 0, y: 0, width: 1000, height: 1000))]
+        var p = PenProcessor()
+        let e = run(&p, [
+            (PenSample(x: 0.75, y: 0.995), 0),   // below the right display, inside the area
+            (PenSample(x: 0.751, y: 1.0), 10),   // jitter
+        ], config: c)
+        #expect(e.count == 1)
+    }
+
     @Test func doubleTapSnapsAndCounts() {
         var p = PenProcessor()
         let e = run(&p, [

@@ -87,6 +87,8 @@ public struct PenConfig: Equatable, Sendable {
     /// Right after touchdown the pen wobbles most, so the radius is larger for this long.
     public var tapGraceNs: UInt64 = 150_000_000
     public var doubleClickNs: UInt64 = 500_000_000
+    /// Past a screen edge the pointer rests on it; sideways hover jitter under this (mm) is ignored.
+    public var edgeRestMM = 0.5
     public var upper: ButtonAction = .rightClick
     public var lower: ButtonAction = .middleClick
     public var eraser: ButtonAction = .leftClick
@@ -128,31 +130,45 @@ public struct PenProcessor {
 
     /// Screen point for a sample, in global display coordinates.
     public static func map(_ s: PenSample, _ c: PenConfig) -> CGPoint {
-        var u = s.x, v = s.y
-        if c.leftHanded { u = 1 - u; v = 1 - v }
+        let (u, v) = oriented(s, c)
         return toScreen(layoutPoint(u: u, v: v, c), c)
     }
 
+    private static func oriented(_ s: PenSample, _ c: PenConfig) -> (Double, Double) {
+        c.leftHanded ? (1 - s.x, 1 - s.y) : (s.x, s.y)
+    }
+
     /// Point in layout space for a tablet position that is already oriented (left-handed applied).
-    public static func layoutPoint(u: Double, v: Double, _ c: PenConfig) -> CGPoint {
+    /// Unclamped, positions outside the area map past the edges of the target.
+    public static func layoutPoint(u: Double, v: Double, _ c: PenConfig, clamped: Bool = true) -> CGPoint {
         let a = c.area
-        let sx = min(max((u - a.minX) / max(a.width, 1e-6), 0), 1)
-        let sy = min(max((v - a.minY) / max(a.height, 1e-6), 0), 1)
+        var sx = (u - a.minX) / max(a.width, 1e-6)
+        var sy = (v - a.minY) / max(a.height, 1e-6)
+        if clamped {
+            sx = min(max(sx, 0), 1)
+            sy = min(max(sy, 0), 1)
+        }
         return CGPoint(x: c.target.minX + sx * max(c.target.width - 1, 0),
                        y: c.target.minY + sy * max(c.target.height - 1, 0))
     }
 
     /// Layout space → global display coordinates, via the nearest display.
     public static func toScreen(_ p: CGPoint, _ c: PenConfig) -> CGPoint {
-        guard !c.segments.isEmpty else { return p }
-        var best = p, bestDistance = Double.infinity
+        place(p, c).point
+    }
+
+    /// The screen point for a layout point, and the layout → screen offset of the display it landed on.
+    private static func place(_ p: CGPoint, _ c: PenConfig) -> (point: CGPoint, offset: CGVector) {
+        guard !c.segments.isEmpty else { return (p, .zero) }
+        var best = (point: p, offset: CGVector.zero), bestDistance = Double.infinity
         for seg in c.segments {
             let x = min(max(p.x, seg.layout.minX), seg.layout.maxX - 1)
             let y = min(max(p.y, seg.layout.minY), seg.layout.maxY - 1)
             let d = (x - p.x) * (x - p.x) + (y - p.y) * (y - p.y)
             if d < bestDistance {
                 bestDistance = d
-                best = CGPoint(x: x - seg.layout.minX + seg.screen.minX, y: y - seg.layout.minY + seg.screen.minY)
+                let offset = CGVector(dx: seg.screen.minX - seg.layout.minX, dy: seg.screen.minY - seg.layout.minY)
+                best = (CGPoint(x: x + offset.dx, y: y + offset.dy), offset)
                 if d == 0 { break }
             }
         }
@@ -161,7 +177,11 @@ public struct PenProcessor {
 
     public mutating func process(_ s: PenSample, config c: PenConfig, now: UInt64, emit: (PenEvent) -> Void) {
         guard s.inRange else { releaseAll(emit: emit); return }
-        let p = Self.map(s, c)
+        let (u, v) = Self.oriented(s, c)
+        let (p, offset) = Self.place(Self.layoutPoint(u: u, v: v, c), c)
+        // Where the pen points on screen, past the edge when it's beyond the area or a display.
+        let raw = Self.layoutPoint(u: u, v: v, c, clamped: false)
+        let beyond = CGPoint(x: raw.x + offset.dx, y: raw.y + offset.dy)
         let k = Self.pointsPerMM(c)
 
         let pressed: Bool
@@ -189,9 +209,9 @@ public struct PenProcessor {
                 let radius = now &- downTime < c.tapGraceNs ? c.tapRadius * 2.5 : c.tapRadius
                 if Self.mm(p, anchor, k) > radius { pinned = false }
             }
-            moveTo(pinned ? anchor : p, emit)
+            if pinned { moveTo(anchor, emit) } else { follow(p, beyond: beyond, c, emit) }
         } else if !pressed {
-            moveTo(p, emit)
+            follow(p, beyond: beyond, c, emit)
         }
 
         // Touchdown.
@@ -263,6 +283,25 @@ public struct PenProcessor {
         guard sources[mb] == 0 else { return }
         held &= ~(1 << UInt8(mb))
         emit(.up(button: mb, at: cursor ?? anchor, clicks: clicks[mb].count, held: held))
+    }
+
+    /// Moves the pointer. Where the pen points past an edge (of the area or of a display), the pointer
+    /// rests on the edge and ignores small sideways jitter: a hovering pen never holds perfectly still,
+    /// and the Dock (like other edge-triggered UI) waits for the pointer to come to rest before showing.
+    private mutating func follow(_ p: CGPoint, beyond: CGPoint, _ c: PenConfig, _ emit: (PenEvent) -> Void) {
+        let pinnedX = abs(beyond.x - p.x) >= 1, pinnedY = abs(beyond.y - p.y) >= 1
+        guard pinnedX || pinnedY, let cur = cursor else { moveTo(p, emit); return }
+        let k = Self.pointsPerMM(c)
+        var q = p
+        if !pinnedX { q.x = Self.deadband(cur.x, p.x, c.edgeRestMM * k.width) }
+        if !pinnedY { q.y = Self.deadband(cur.y, p.y, c.edgeRestMM * k.height) }
+        moveTo(q, emit)
+    }
+
+    /// Follows `target` but stays put while it's within `radius`, then trails it by `radius`.
+    private static func deadband(_ current: Double, _ target: Double, _ radius: Double) -> Double {
+        let d = target - current
+        return abs(d) <= radius ? current : target - (d > 0 ? radius : -radius)
     }
 
     private mutating func moveTo(_ point: CGPoint, _ emit: (PenEvent) -> Void) {
