@@ -10,8 +10,10 @@ struct Settings: Equatable {
     var eraser: ButtonAction = .leftClick
     /// Fraction of full pressure needed to click.
     var tipThreshold = 0.10
-    /// Click guard radius in points; 0 = off.
-    var tapStability = 7.0
+    /// Click guard radius in tenths of a millimetre on the tablet, in `tapStabilityStep`s; 0 = off.
+    var tapStability = 2.0
+    static let tapStabilityRange = 0.0...6.0
+    static let tapStabilityStep = 0.5
     /// "main", "all", or a `DisplayInfo.id`.
     var display = "main"
     var keepProportions = true
@@ -43,7 +45,8 @@ extension Settings: Codable {
         lower = value(.lower, d.lower)
         eraser = value(.eraser, d.eraser)
         tipThreshold = value(.tipThreshold, d.tipThreshold)
-        tapStability = value(.tapStability, d.tapStability)
+        let step = Self.tapStabilityStep
+        tapStability = min((value(.tapStability, d.tapStability) / step).rounded() * step, Self.tapStabilityRange.upperBound)
         display = value(.display, d.display)
         keepProportions = value(.keepProportions, d.keepProportions)
         leftHanded = value(.leftHanded, d.leftHanded)
@@ -255,7 +258,7 @@ final class AppModel {
         c.target = targetLayoutRect
         c.segments = mappedDisplays.map { DisplaySegment(layout: layoutFrame($0), screen: $0.frame) }
         c.tipThreshold = settings.tipThreshold
-        c.tapRadius = settings.tapStability / 10  // slider 0...20 → 0...2 mm
+        c.tapRadius = settings.tapStability / 10  // slider 0...6 → 0...0.6 mm
         c.tabletMM = tabletSizeMM
         c.doubleClickNs = UInt64(NSEvent.doubleClickInterval * 1_000_000_000)
         c.upper = settings.upper

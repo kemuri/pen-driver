@@ -81,7 +81,7 @@ public struct PenConfig: Equatable, Sendable {
     public var tipThreshold = 0.10
     /// Click guard: how far (millimetres on the tablet) the pen may wobble after touching down before it
     /// becomes a drag. Measured on the tablet so it holds however small the area or large the screens. 0 = off.
-    public var tapRadius = 0.7
+    public var tapRadius = 0.2
     /// Physical size of the whole tablet surface, to turn pointer movement back into millimetres.
     public var tabletMM = CGSize(width: 224, height: 148)
     /// Right after touchdown the pen wobbles most, so the radius is larger for this long.

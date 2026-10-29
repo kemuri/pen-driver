@@ -293,7 +293,7 @@ private struct PenPane: View {
 
             Section {
                 labeledSlider("Tip feel", value: $model.settings.tipThreshold, in: 0.01...0.5, low: "Soft", high: "Firm")
-                labeledSlider("Tap stability", value: $model.settings.tapStability, in: 0...20, low: "Off", high: "Strong")
+                labeledSlider("Tap stability", value: $model.settings.tapStability, in: Settings.tapStabilityRange, step: Settings.tapStabilityStep, low: "Off", high: "Strong")
             } header: {
                 Text("Tip")
             } footer: {
@@ -308,14 +308,18 @@ private struct PenPane: View {
         }
     }
 
-    private func labeledSlider(_ title: String, value: Binding<Double>, in range: ClosedRange<Double>, low: String, high: String) -> some View {
-        LabeledContent(title) {
-            Slider(value: value, in: range) {
-                EmptyView()
-            } minimumValueLabel: {
-                Text(low).font(.caption).foregroundStyle(.secondary)
-            } maximumValueLabel: {
-                Text(high).font(.caption).foregroundStyle(.secondary)
+    /// With a `step`, the slider shows tick marks and snaps to them.
+    private func labeledSlider(_ title: String, value: Binding<Double>, in range: ClosedRange<Double>, step: Double? = nil,
+                               low: String, high: String) -> some View {
+        let lowLabel = Text(low).font(.caption).foregroundStyle(.secondary)
+        let highLabel = Text(high).font(.caption).foregroundStyle(.secondary)
+        return LabeledContent(title) {
+            Group {
+                if let step {
+                    Slider(value: value, in: range, step: step) { EmptyView() } minimumValueLabel: { lowLabel } maximumValueLabel: { highLabel }
+                } else {
+                    Slider(value: value, in: range) { EmptyView() } minimumValueLabel: { lowLabel } maximumValueLabel: { highLabel }
+                }
             }
             .frame(width: 250)
         }
