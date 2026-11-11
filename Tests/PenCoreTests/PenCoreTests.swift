@@ -29,6 +29,8 @@ func decode(_ layout: PenLayout, _ report: [UInt8]) -> PenSample {
         #expect(pen.barrel?.bitOffset == 9)
         #expect(pen.secondaryBarrel?.bitOffset == 10)
         #expect(pen.inRange?.bitOffset == 13)
+        #expect(pen.tiltX?.bitOffset == 80 && pen.tiltX?.bitSize == 8 && pen.tiltX?.logicalMin == -64)
+        #expect(pen.tiltY?.bitOffset == 88)
 
         // Pen hovering at (22400, 7400), lower button held.
         var report = [UInt8](repeating: 0, count: 27)
@@ -40,6 +42,13 @@ func decode(_ layout: PenLayout, _ report: [UInt8]) -> PenSample {
         #expect(abs(s.x - 0.5) < 1e-9 && abs(s.y - 0.25) < 1e-9)
         #expect(s.inRange && s.barrel && !s.secondaryBarrel && !s.tipSwitch && !s.eraser)
         #expect(s.pressure == 0)
+        #expect(s.tiltX == 0 && s.tiltY == 0)
+
+        // Leaning 30° right and 64° away from the user.
+        report[10] = 30
+        report[11] = 0xC0
+        s = decode(pen, report)
+        #expect(abs(s.tiltX - 30) < 1e-9 && abs(s.tiltY + 64) < 1e-9)
 
         // Touching with full pressure, eraser end (invert bit).
         report[1] = 0b0011_0001
@@ -344,5 +353,14 @@ func decode(_ layout: PenLayout, _ report: [UInt8]) -> PenSample {
         // Small display dropped above: sits on top, centred if close.
         let small = CGRect(x: 600, y: -1200, width: 1440, height: 900)
         #expect(DisplayArrangement.snap(small, to: [main]) == CGRect(x: 560, y: -900, width: 1440, height: 900))
+    }
+
+    @Test func tidiesNearlyAlignedDisplays() {
+        // macOS left the left display 13 pt low: it lines up with main.
+        let tidied = DisplayArrangement.tidy([main, left], keeping: 0)
+        #expect(tidied == [main, CGRect(x: -2560, y: 0, width: 2560, height: 1440)])
+        // Well apart on purpose: left alone.
+        let low = CGRect(x: -2560, y: 600, width: 2560, height: 1440)
+        #expect(DisplayArrangement.tidy([main, low], keeping: 0) == [main, low])
     }
 }

@@ -37,6 +37,26 @@ public struct HIDField: Equatable, Sendable {
         return min(max(Double(read(p, length) - logicalMin) / span, 0), 1)
     }
 
+    /// Value in physical units, scaled by the unit exponent; the logical value if the descriptor
+    /// declares no physical range.
+    @inline(__always)
+    public func physical(_ p: UnsafePointer<UInt8>, _ length: Int) -> Double {
+        let raw = Double(read(p, length))
+        let logicalSpan = Double(logicalMax - logicalMin), physicalSpan = Double(physicalMax - physicalMin)
+        let value = logicalSpan > 0 && physicalSpan > 0
+            ? Double(physicalMin) + (raw - Double(logicalMin)) * physicalSpan / logicalSpan
+            : raw
+        return unitExponent == 0 ? value : value * pow(10, Double(unitExponent))
+    }
+
+    /// An angle in degrees. Radians are converted; anything else is taken as degrees, as the
+    /// HID spec has it for tilt.
+    @inline(__always)
+    public func degrees(_ p: UnsafePointer<UInt8>, _ length: Int) -> Double {
+        let value = physical(p, length)
+        return unit == 0x12 ? value * 180 / .pi : value  // 0x12: SI rotation (radians)
+    }
+
     /// Physical extent in millimetres, if the descriptor declares a length unit.
     public var physicalLengthMM: Double? {
         let span = Double(physicalMax - physicalMin)
@@ -63,6 +83,8 @@ public struct PenLayout: Sendable {
     public var eraser: HIDField?
     public var invert: HIDField?
     public var inRange: HIDField?
+    public var tiltX: HIDField?
+    public var tiltY: HIDField?
 
     public var widthMM: Double? { x.physicalLengthMM }
     public var heightMM: Double? { y.physicalLengthMM }
@@ -81,7 +103,9 @@ public struct PenLayout: Sendable {
             inRange: inRange.map { $0.read(p, length) != 0 } ?? true,
             barrel: bit(barrel),
             secondaryBarrel: bit(secondaryBarrel),
-            eraser: eraserEnd
+            eraser: eraserEnd,
+            tiltX: tiltX.map { $0.degrees(p, length) } ?? 0,
+            tiltY: tiltY.map { $0.degrees(p, length) } ?? 0
         )
     }
 }
@@ -104,6 +128,8 @@ public enum HIDReportDescriptor {
     static let tipPressure: UInt32 = 0x000D_0030
     static let inRange: UInt32 = 0x000D_0032
     static let invert: UInt32 = 0x000D_003C
+    static let xTilt: UInt32 = 0x000D_003D
+    static let yTilt: UInt32 = 0x000D_003E
     static let tipSwitch: UInt32 = 0x000D_0042
     static let barrelSwitch: UInt32 = 0x000D_0044
     static let eraser: UInt32 = 0x000D_0045
@@ -252,7 +278,9 @@ public enum HIDReportDescriptor {
                 secondaryBarrel: first(secondaryBarrelSwitch),
                 eraser: first(eraser),
                 invert: first(invert),
-                inRange: first(inRange)))
+                inRange: first(inRange),
+                tiltX: first(xTilt),
+                tiltY: first(yTilt)))
         }
         return Parsed(usesReportIDs: usesReportIDs, pens: pens)
     }

@@ -17,12 +17,18 @@ public struct PenSample: Equatable, Sendable {
     public var secondaryBarrel: Bool
     /// The eraser end is the one near the tablet.
     public var eraser: Bool
+    /// How far the pen leans, in degrees, in the tablet's native orientation: positive X leans
+    /// right, positive Y leans toward the user. 0 if the device doesn't report tilt.
+    public var tiltX: Double
+    public var tiltY: Double
 
     public init(x: Double, y: Double, pressure: Double = 0, tipSwitch: Bool = false, hasTipSwitch: Bool = false,
-                inRange: Bool = true, barrel: Bool = false, secondaryBarrel: Bool = false, eraser: Bool = false) {
+                inRange: Bool = true, barrel: Bool = false, secondaryBarrel: Bool = false, eraser: Bool = false,
+                tiltX: Double = 0, tiltY: Double = 0) {
         self.x = x; self.y = y; self.pressure = pressure; self.tipSwitch = tipSwitch; self.hasTipSwitch = hasTipSwitch
         self.inRange = inRange
         self.barrel = barrel; self.secondaryBarrel = secondaryBarrel; self.eraser = eraser
+        self.tiltX = tiltX; self.tiltY = tiltY
     }
 }
 
@@ -92,6 +98,9 @@ public struct PenConfig: Equatable, Sendable {
     public var upper: ButtonAction = .rightClick
     public var lower: ButtonAction = .middleClick
     public var eraser: ButtonAction = .leftClick
+    /// Tablet mode: pointer events also carry pressure and tilt, and the pen announces itself
+    /// (pen or eraser end) as it comes near and leaves. Off, apps only see a mouse.
+    public var tabletEvents = false
 
     public init() {}
 }
@@ -101,6 +110,12 @@ public enum PenEvent: Equatable, Sendable {
     case move(CGPoint, held: UInt8)
     case down(button: Int, at: CGPoint, clicks: Int, held: UInt8)
     case up(button: Int, at: CGPoint, clicks: Int, held: UInt8)
+
+    public var held: UInt8 {
+        switch self {
+        case let .move(_, held), let .down(_, _, _, held), let .up(_, _, _, held): held
+        }
+    }
 }
 
 /// Turns pen samples into pointer events: area mapping, tip threshold with hysteresis,
