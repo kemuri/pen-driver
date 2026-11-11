@@ -1,5 +1,5 @@
 #!/bin/zsh
-# Builds "build/Pen Driver.app".
+# Builds "build/wdrive.app".
 #   --install   also copy it to /Applications (quitting the running copy)
 #   --release   universal (Apple silicon + Intel), Developer ID, hardened runtime: ready to notarize
 set -euo pipefail
@@ -16,12 +16,15 @@ done
 
 if (( RELEASE )); then ARCHS=(--arch arm64 --arch x86_64); else ARCHS=(--arch arm64); fi
 swift build -c release $ARCHS
-BIN="$(swift build -c release $ARCHS --show-bin-path)/PenDriver"
+BIN="$(swift build -c release $ARCHS --show-bin-path)/wdrive"
 
-APP="build/Pen Driver.app"
+APP="build/wdrive.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$BIN" "$APP/Contents/MacOS/PenDriver"
+# SwiftPM records the deployment target as the SDK too, and macOS draws an app's controls for the
+# SDK it says it was built with: without this, the controls of that older macOS.
+MINOS="$(vtool -show-build "$BIN" | awk '/minos/ {print $2; exit}')"
+vtool -set-build-version macos "$MINOS" "$(xcrun --show-sdk-version)" -replace -output "$APP/Contents/MacOS/wdrive" "$BIN"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
@@ -29,19 +32,19 @@ cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 IDENTITIES="$(security find-identity -v -p codesigning)"
 if (( RELEASE )); then
   # Notarization needs Developer ID, the hardened runtime and a secure timestamp.
-  IDENTITY="${PEN_DRIVER_IDENTITY:-$(grep 'Developer ID Application' <<<"$IDENTITIES" | awk 'NR==1 {print $2}')}"
+  IDENTITY="${WDRIVE_IDENTITY:-$(grep 'Developer ID Application' <<<"$IDENTITIES" | awk 'NR==1 {print $2}')}"
   [[ -n "$IDENTITY" ]] || { echo "A release needs a Developer ID Application certificate." >&2; exit 1; }
   codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP"
   codesign --verify --strict --verbose=2 "$APP"
 else
-  IDENTITY="${PEN_DRIVER_IDENTITY:-$( { grep 'Developer ID Application' <<<"$IDENTITIES"; grep 'Apple Development' <<<"$IDENTITIES"; } | awk 'NR==1 {print $2}')}"
+  IDENTITY="${WDRIVE_IDENTITY:-$( { grep 'Developer ID Application' <<<"$IDENTITIES"; grep 'Apple Development' <<<"$IDENTITIES"; } | awk 'NR==1 {print $2}')}"
   codesign --force --sign "${IDENTITY:--}" "$APP"
 fi
 echo "Built $APP (signed: ${IDENTITY:-ad-hoc})"
 
 if (( INSTALL )); then
-  pkill -x PenDriver 2>/dev/null && sleep 0.5 || true
-  rm -rf "/Applications/Pen Driver.app"
+  pkill -x wdrive 2>/dev/null && sleep 0.5 || true
+  rm -rf "/Applications/wdrive.app"
   cp -R "$APP" /Applications/
-  echo "Installed to /Applications/Pen Driver.app"
+  echo "Installed to /Applications/wdrive.app"
 fi

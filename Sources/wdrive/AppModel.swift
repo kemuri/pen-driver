@@ -22,16 +22,29 @@ struct Settings: Equatable {
     var area = CGRect(x: 0, y: 0, width: 1, height: 1)
     /// Active area when proportions are on: its centre and width are kept, the height follows the screen.
     var proportionalArea = CGRect(x: 0, y: 0, width: 1, height: 1)
+    /// Custom was picked under Proportions: the area stays as drawn, even when it covers the whole tablet.
+    var customArea = false
     /// Display origins as arranged for the tablet, by `DisplayInfo.id`. Empty = same as macOS.
     var layout: [String: CGPoint] = [:]
     var enabled = true
     var showMenuBarIcon = true
+    var output = PenOutput.mouse
+}
+
+/// What apps see of the pen.
+enum PenOutput: String, Codable, CaseIterable, Identifiable {
+    /// Plain mouse events: clicks and drags.
+    case mouse
+    /// Tablet events too: pressure, tilt and which end of the pen is down.
+    case tablet
+    var id: Self { self }
+    var title: String { rawValue.capitalized }
 }
 
 extension Settings: Codable {
     enum CodingKeys: String, CodingKey {
         case upper, lower, eraser, tipThreshold, tapStability, display, keepProportions, leftHanded
-        case area, proportionalArea, layout, enabled, showMenuBarIcon
+        case area, proportionalArea, customArea, layout, enabled, showMenuBarIcon, output
     }
 
     /// Missing or unreadable keys fall back to defaults, so new settings never wipe old ones.
@@ -52,10 +65,19 @@ extension Settings: Codable {
         leftHanded = value(.leftHanded, d.leftHanded)
         area = value(.area, d.area)
         proportionalArea = value(.proportionalArea, d.proportionalArea)
+        customArea = value(.customArea, d.customArea)
         layout = value(.layout, d.layout)
         enabled = value(.enabled, d.enabled)
         showMenuBarIcon = value(.showMenuBarIcon, d.showMenuBarIcon)
+        output = value(.output, d.output)
     }
+}
+
+/// How the area fills the tablet: the displays' shape, the whole tablet, or drawn by hand.
+enum AreaMode: String, CaseIterable, Identifiable {
+    case displays, fill, custom
+    var id: Self { self }
+    var title: String { rawValue.capitalized }
 }
 
 struct DisplayInfo: Identifiable, Equatable {
@@ -76,6 +98,9 @@ final class AppModel {
         }
     }
     private(set) var displays: [DisplayInfo] = []
+    /// Where the displays sit for the tablet without a custom layout: as macOS arranges them,
+    /// with nearly aligned edges lined up.
+    private(set) var defaultLayout: [String: CGPoint] = [:]
     private(set) var tablets: [TabletInfo] = []
     private(set) var live = LiveState()
     private(set) var inputMonitoringGranted = true
@@ -86,6 +111,7 @@ final class AppModel {
     let driver = TabletDriver()
     let isPreview: Bool
     @ObservationIgnored private var liveTimer: Timer?
+    @ObservationIgnored private var liveWatchers = Set<String>()
     @ObservationIgnored private var pollTimer: Timer?
     @ObservationIgnored private static let defaultsKey = "settings.v1"
 
@@ -94,7 +120,9 @@ final class AppModel {
 
     init(preview: Bool = false) {
         isPreview = preview
-        if !preview, let data = UserDefaults.standard.data(forKey: Self.defaultsKey),
+        // Settings saved before the rename live under the old bundle identifier.
+        if !preview, let data = UserDefaults.standard.data(forKey: Self.defaultsKey)
+            ?? UserDefaults(suiteName: "express.looop.pendriver")?.data(forKey: Self.defaultsKey),
            let saved = try? JSONDecoder().decode(Settings.self, from: data) {
             settings = saved
         } else {
@@ -104,7 +132,7 @@ final class AppModel {
         if preview {
             tablets = [TabletInfo(id: 1, name: "Wacom Intuos Pro M", widthMM: 224, heightMM: 148,
                                   pressureLevels: 8192, status: .active(exclusive: true))]
-            live = LiveState(inRange: true, u: 0.31, v: 0.62, pressure: 0.42, tip: true)
+            live = LiveState(inRange: true, u: 0.31, v: 0.62, pressure: 0.42, tip: true, tiltX: 24, tiltY: -18)
             if displays.count > 1 { settings.display = "all" }
             return
         }
@@ -134,11 +162,14 @@ final class AppModel {
 
     // MARK: Live view
 
-    /// Mirrors the pen state into the UI while the window is visible.
-    func setLiveUpdates(_ on: Bool) {
+    /// Mirrors the pen state into the UI while any settings window is in the foreground.
+    func setLiveUpdates(_ on: Bool, for watcher: String) {
+        if on { liveWatchers.insert(watcher) } else { liveWatchers.remove(watcher) }
+        let wanted = !liveWatchers.isEmpty
+        guard !isPreview, wanted != (liveTimer != nil) else { return }
         liveTimer?.invalidate()
         liveTimer = nil
-        guard on, !isPreview else { return }
+        guard wanted else { return }
         liveTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
             guard let self else { return }
             let state = self.driver.live
@@ -175,12 +206,67 @@ final class AppModel {
         return CGRect(x: min(max(r.midX - w / 2, 0), 1 - w), y: min(max(r.midY - h / 2, 0), 1 - h), width: w, height: h)
     }
 
+    /// Drawing the area makes it a custom one.
     func setArea(_ r: CGRect) {
-        if settings.keepProportions { settings.proportionalArea = r } else { settings.area = r }
+        var s = settings
+        s.customArea = true
+        if s.keepProportions { s.proportionalArea = r } else { s.area = r }
+        settings = s
     }
 
     func resetArea() {
-        setArea(CGRect(x: 0, y: 0, width: 1, height: 1))
+        var s = settings
+        s.customArea = false
+        if s.keepProportions { s.proportionalArea = Self.wholeTablet } else { s.area = Self.wholeTablet }
+        settings = s
+    }
+
+    private static let wholeTablet = CGRect(x: 0, y: 0, width: 1, height: 1)
+
+    var areaMode: AreaMode {
+        get {
+            let s = settings
+            if !s.customArea {
+                if s.keepProportions, s.proportionalArea == Self.wholeTablet { return .displays }
+                if !s.keepProportions, s.area == Self.wholeTablet { return .fill }
+            }
+            return .custom
+        }
+        set {
+            var s = settings
+            switch newValue {
+            case .displays:
+                s.customArea = false
+                s.keepProportions = true
+                s.proportionalArea = Self.wholeTablet
+            case .fill:
+                s.customArea = false
+                s.keepProportions = false
+                s.area = Self.wholeTablet
+            case .custom:
+                // Starts from the area as it is now.
+                s.customArea = true
+            }
+            settings = s
+        }
+    }
+
+    /// Where a screen point (global display coordinates, top-left origin) lands on the tablet:
+    /// normalized, in the orientation the user sees. Nil off the mapped displays.
+    func tabletPoint(forScreen p: CGPoint) -> CGPoint? {
+        let c = penConfig
+        let layout: CGPoint
+        if c.segments.isEmpty {
+            guard c.target.contains(p) else { return nil }
+            layout = p
+        } else {
+            guard let seg = c.segments.first(where: { $0.screen.contains(p) }) else { return nil }
+            layout = CGPoint(x: p.x - seg.screen.minX + seg.layout.minX, y: p.y - seg.screen.minY + seg.layout.minY)
+        }
+        let sx = (layout.x - c.target.minX) / max(c.target.width - 1, 1)
+        let sy = (layout.y - c.target.minY) / max(c.target.height - 1, 1)
+        let area = PenProcessor.reach(c)
+        return CGPoint(x: area.minX + sx * area.width, y: area.minY + sy * area.height)
     }
 
     /// Active area size on the tablet, in millimetres.
@@ -192,7 +278,7 @@ final class AppModel {
     // MARK: Displays
 
     func layoutFrame(_ d: DisplayInfo) -> CGRect {
-        CGRect(origin: settings.layout[d.id] ?? d.frame.origin, size: d.frame.size)
+        CGRect(origin: settings.layout[d.id] ?? defaultLayout[d.id] ?? d.frame.origin, size: d.frame.size)
     }
 
     var layoutUnion: CGRect {
@@ -224,13 +310,14 @@ final class AppModel {
         var layout: [String: CGPoint] = [:]
         for d in others { layout[d.id] = layoutFrame(d).origin }
         layout[id] = snapped.origin
-        // Same relative positions as in macOS: nothing custom to remember.
+        // Same relative positions as by default: nothing custom to remember.
+        let origin = { (d: DisplayInfo) in self.defaultLayout[d.id] ?? d.frame.origin }
         let first = displays[0]
-        let dx = layout[first.id]!.x - first.frame.minX, dy = layout[first.id]!.y - first.frame.minY
-        let matchesMacOS = displays.allSatisfy {
-            abs(layout[$0.id]!.x - $0.frame.minX - dx) < 0.5 && abs(layout[$0.id]!.y - $0.frame.minY - dy) < 0.5
+        let dx = layout[first.id]!.x - origin(first).x, dy = layout[first.id]!.y - origin(first).y
+        let matchesDefault = displays.allSatisfy {
+            abs(layout[$0.id]!.x - origin($0).x - dx) < 0.5 && abs(layout[$0.id]!.y - origin($0).y - dy) < 0.5
         }
-        settings.layout = matchesMacOS ? [:] : layout
+        settings.layout = matchesDefault ? [:] : layout
     }
 
     func resetLayout() {
@@ -247,6 +334,8 @@ final class AppModel {
             if !seen.insert(key).inserted { key += "-\(id)" }
             return DisplayInfo(id: key, name: screen.localizedName, frame: CGDisplayBounds(id), isMain: id == main)
         }
+        let tidied = DisplayArrangement.tidy(displays.map(\.frame), keeping: displays.firstIndex(where: \.isMain) ?? 0)
+        defaultLayout = Dictionary(uniqueKeysWithValues: zip(displays.map(\.id), tidied.map(\.origin)))
     }
 
     // MARK: Driver
@@ -264,6 +353,7 @@ final class AppModel {
         c.upper = settings.upper
         c.lower = settings.lower
         c.eraser = settings.eraser
+        c.tabletEvents = settings.output == .tablet
         return c
     }
 

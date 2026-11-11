@@ -1,4 +1,4 @@
-# Pen Driver
+# wdrive
 
 A minimal, native macOS driver for Wacom and XP-Pen tablets: area mapping across one or more
 displays, click guard (tap stability), and pen button mapping. Written as a low-latency
@@ -6,34 +6,34 @@ replacement for OpenTabletDriver, whose cursor lags when the system is under hea
 
 ## Install
 
-Download the latest `PenDriver-<version>.dmg` from
-[Releases](https://github.com/kemuri/pen-driver/releases), open it and drag Pen Driver to
+Download the latest `wdrive-<version>.dmg` from
+[Releases](https://github.com/kemuri/pen-driver/releases), open it and drag wdrive to
 Applications. It's signed with a Developer ID and notarized by Apple.
 
 ## Build
 
-    ./build.sh             # → build/Pen Driver.app
+    ./build.sh             # → build/wdrive.app
     ./build.sh --install   # also installs it to /Applications and quits the running copy
     swift test             # descriptor parser, mapping, click guard, display snapping
 
 Requires macOS 15+ and Xcode. `build.sh` signs with your Developer ID / Apple Development
 certificate if one is installed (a stable signature keeps the permission grants across
-rebuilds), otherwise ad-hoc. Set `PEN_DRIVER_IDENTITY` to choose one.
+rebuilds), otherwise ad-hoc. Set `WDRIVE_IDENTITY` to choose one.
 
 ## Release
 
-    Scripts/release.sh                # → build/PenDriver-<version>.dmg, notarized and stapled
+    Scripts/release.sh                # → build/wdrive-<version>.dmg, notarized and stapled
     Scripts/release.sh --publish      # also creates a draft GitHub release v<version> with it
     Scripts/release.sh --no-notarize  # just build and package, to check locally
 
 The version comes from `CFBundleShortVersionString` in `Resources/Info.plist`. The build is
 universal (Apple silicon and Intel), signed with Developer ID and the hardened runtime. Store
 notarization credentials once with
-`xcrun notarytool store-credentials pen-driver --apple-id <apple-id> --team-id <team-id>`
-(set `PEN_DRIVER_NOTARY_PROFILE` to use another profile name).
+`xcrun notarytool store-credentials wdrive --apple-id <apple-id> --team-id <team-id>`
+(set `WDRIVE_NOTARY_PROFILE` to use another profile name).
 
 On first launch, allow **Input Monitoring** (to read the tablet) and **Accessibility** (to move
-the pointer). If OpenTabletDriver is running, quit it (the Tablet pane offers a button). Existing
+the pointer). If OpenTabletDriver is running, quit it (the settings window offers a button). Existing
 OpenTabletDriver settings (buttons, tip threshold, left-handed, display) are imported on first run.
 
 ## Features
@@ -51,6 +51,9 @@ OpenTabletDriver settings (buttons, tip threshold, left-handed, display) are imp
   jitter, so a hidden Dock and hot corners work as with a mouse.
 - **Modifier keys** (⌘-click, ⇧-click, ⌥-drag) are read from the keyboard itself.
 - **Pen buttons, eraser, tip pressure threshold**, left-handed (rotated 180°) use.
+- **Mouse or tablet mode:** mouse mode (the default) sends plain mouse events. Tablet mode adds
+  pressure and tilt to them and tells apps when the pen or its eraser end comes near, so drawing
+  apps can use them.
 - Lives in the menu bar (can be hidden; open the app again to get the settings window).
 
 ## How it works
@@ -63,7 +66,7 @@ OpenTabletDriver settings (buttons, tip threshold, left-handed, display) are imp
   IOKit, decodes it, runs the click guard and posts the CGEvent inline. No queues or thread hops,
   so system load doesn't add latency the way it does for normal-priority threads.
 - `Sources/PenCore` is pure, unit-tested logic (parser, mapping, click guard, display snapping);
-  `Sources/PenDriver` is the HID/CGEvent layer and the SwiftUI settings window.
+  `Sources/wdrive` is the HID/CGEvent layer and the SwiftUI settings window.
 
 ## Status
 
@@ -72,5 +75,7 @@ HID digitizer descriptor but hasn't been tested on hardware yet; reports welcome
 
 ## Diagnostics
 
-    "build/Pen Driver.app/Contents/MacOS/PenDriver" --list-tablets
-    "build/Pen Driver.app/Contents/MacOS/PenDriver" --snapshot out.png --pane mapping [--dark]
+    "build/wdrive.app/Contents/MacOS/wdrive" --list-tablets
+    "build/wdrive.app/Contents/MacOS/wdrive" --snapshot out.png [--terrain] [--page mapping|settings] [--dark]
+    "build/wdrive.app/Contents/MacOS/wdrive" --snapshot out.png --classic [--tab mapping|general|about] [--dark]
+    "build/wdrive.app/Contents/MacOS/wdrive" --snapshot out.png --tuning terrain|dots [--dark]

@@ -1,11 +1,11 @@
 #!/bin/zsh
-# Builds a notarized disk image: build/PenDriver-<version>.dmg (version from Resources/Info.plist).
+# Builds a notarized disk image: build/wdrive-<version>.dmg (version from Resources/Info.plist).
 #   --publish        also create a draft GitHub release v<version> with the DMG attached (needs gh)
 #   --no-notarize    stop before notarizing, to check the build and the disk image locally
 #
 # Notarization reads credentials stored in the keychain once with:
-#   xcrun notarytool store-credentials pen-driver --apple-id <apple-id> --team-id <team-id>
-# (it asks for an app-specific password from account.apple.com). PEN_DRIVER_NOTARY_PROFILE picks
+#   xcrun notarytool store-credentials wdrive --apple-id <apple-id> --team-id <team-id>
+# (it asks for an app-specific password from account.apple.com). WDRIVE_NOTARY_PROFILE picks
 # another profile name.
 set -euo pipefail
 cd "${0:A:h}/.."
@@ -20,11 +20,11 @@ for arg in "$@"; do
 done
 (( PUBLISH && !NOTARIZE )) && { echo "--publish needs notarization." >&2; exit 2; }
 
-PROFILE="${PEN_DRIVER_NOTARY_PROFILE:-pen-driver}"
+PROFILE="${WDRIVE_NOTARY_PROFILE:-wdrive}"
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)"
 TAG="v$VERSION"
-APP="build/Pen Driver.app"
-DMG="build/PenDriver-$VERSION.dmg"
+APP="build/wdrive.app"
+DMG="build/wdrive-$VERSION.dmg"
 
 if (( PUBLISH )); then
   [[ -z "$(git status --porcelain)" ]] || { echo "Commit your changes first." >&2; exit 1; }
@@ -51,7 +51,7 @@ IDENTITY="$(codesign -dvv "$APP" 2>&1 | sed -n 's/^Authority=\(Developer ID Appl
 
 # The app itself gets a ticket too, so it also passes Gatekeeper offline once copied out of the image.
 if (( NOTARIZE )); then
-  ZIP="$(mktemp -d)/PenDriver.zip"
+  ZIP="$(mktemp -d)/wdrive.zip"
   ditto -c -k --keepParent "$APP" "$ZIP"
   notarize "$ZIP"
   xcrun stapler staple "$APP"
@@ -62,7 +62,7 @@ STAGE="$(mktemp -d)"
 cp -R "$APP" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
 rm -f "$DMG"
-hdiutil create -quiet -volname "Pen Driver" -srcfolder "$STAGE" -fs HFS+ -format UDZO -ov "$DMG"
+hdiutil create -quiet -volname "wdrive" -srcfolder "$STAGE" -fs HFS+ -format UDZO -ov "$DMG"
 rm -rf "$STAGE"
 codesign --force --timestamp --sign "$IDENTITY" "$DMG"
 
@@ -75,6 +75,6 @@ echo "Built $DMG"
 
 if (( PUBLISH )); then
   gh release create "$TAG" "$DMG" --draft --target "$(git rev-parse HEAD)" \
-    --title "Pen Driver $VERSION" --generate-notes
+    --title "wdrive $VERSION" --generate-notes
   echo "Draft release $TAG created; review and publish it on GitHub."
 fi

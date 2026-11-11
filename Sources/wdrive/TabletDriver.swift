@@ -30,6 +30,9 @@ struct LiveState: Equatable {
     var eraser = false
     var lower = false
     var upper = false
+    /// Lean in degrees, in the orientation the user sees: positive X leans right, positive Y toward the user.
+    var tiltX = 0.0
+    var tiltY = 0.0
 }
 
 /// Reads pen reports and moves the pointer.
@@ -40,7 +43,7 @@ struct LiveState: Equatable {
 /// so a busy system can't delay the pointer the way it delays normal-priority threads.
 final class TabletDriver: @unchecked Sendable {
     private static let vendorIDs = [0x056A /* Wacom */, 0x28BD /* XP-Pen */]
-    private let log = Logger(subsystem: "express.looop.pendriver", category: "driver")
+    private let log = Logger(subsystem: "express.looop.wdrive", category: "driver")
 
     // Shared with the main thread.
     private let configLock = OSAllocatedUnfairLock(initialState: PenConfig())
@@ -54,11 +57,14 @@ final class TabletDriver: @unchecked Sendable {
     private var enabled = false
     private var processor = PenProcessor()
     private let output = EventOutput()
+    /// Tablet mode: the end of the pen apps were last told is near the tablet, and whose tablet it is.
+    private var proximity: (tool: EventOutput.Tool, vendorID: Int)?
 
     fileprivate final class Device {
         let ref: IOHIDDevice
         let id: UInt64
         let name: String
+        let vendorID: Int
         let layouts: [PenLayout]
         let usesReportIDs: Bool
         let bufferSize: Int
@@ -67,10 +73,12 @@ final class TabletDriver: @unchecked Sendable {
         var status: TabletInfo.Status = .disabled
         unowned let driver: TabletDriver
 
-        init(ref: IOHIDDevice, id: UInt64, name: String, parsed: HIDReportDescriptor.Parsed, bufferSize: Int, driver: TabletDriver) {
+        init(ref: IOHIDDevice, id: UInt64, name: String, vendorID: Int, parsed: HIDReportDescriptor.Parsed,
+             bufferSize: Int, driver: TabletDriver) {
             self.ref = ref
             self.id = id
             self.name = name
+            self.vendorID = vendorID
             self.layouts = parsed.pens
             self.usesReportIDs = parsed.usesReportIDs
             self.bufferSize = bufferSize
@@ -104,7 +112,7 @@ final class TabletDriver: @unchecked Sendable {
             ready.signal()
             CFRunLoopRun()
         }
-        thread.name = "PenDriver HID"
+        thread.name = "wdrive HID"
         thread.qualityOfService = .userInteractive
         thread.start()
         ready.wait()
@@ -122,6 +130,7 @@ final class TabletDriver: @unchecked Sendable {
                 devices.forEach(open)
             } else {
                 processor.releaseAll(emit: output.post)
+                leaveProximity()
                 devices.forEach(close)
                 liveLock.withLock { $0 = LiveState() }
             }
@@ -176,7 +185,8 @@ final class TabletDriver: @unchecked Sendable {
         var id: UInt64 = 0
         IORegistryEntryGetRegistryEntryID(IOHIDDeviceGetService(ref), &id)
         let maxReport = IOHIDDeviceGetProperty(ref, kIOHIDMaxInputReportSizeKey as CFString) as? Int ?? 64
-        let device = Device(ref: ref, id: id, name: Self.displayName(ref), parsed: parsed,
+        let vendorID = IOHIDDeviceGetProperty(ref, kIOHIDVendorIDKey as CFString) as? Int ?? 0
+        let device = Device(ref: ref, id: id, name: Self.displayName(ref), vendorID: vendorID, parsed: parsed,
                             bufferSize: max(maxReport, 64), driver: self)
         devices.append(device)
         log.info("Tablet attached: \(device.name, privacy: .public), \(parsed.pens.count) pen report(s)")
@@ -189,6 +199,7 @@ final class TabletDriver: @unchecked Sendable {
         let device = devices.remove(at: index)
         close(device)
         processor.releaseAll(emit: output.post)
+        leaveProximity()
         liveLock.withLock { $0 = LiveState() }
         publishTablets()
     }
@@ -231,15 +242,41 @@ final class TabletDriver: @unchecked Sendable {
         guard enabled, length > 0, let layout = d.layout(for: d.usesReportIDs ? report[0] : 0) else { return }
         let sample = layout.decode(report, length)
         let config = configLock.withLock { $0 }
-        processor.process(sample, config: config, now: clock_gettime_nsec_np(CLOCK_UPTIME_RAW), emit: output.post)
+        var u = sample.x, v = sample.y, tiltX = sample.tiltX, tiltY = sample.tiltY
+        if config.leftHanded { u = 1 - u; v = 1 - v; tiltX = -tiltX; tiltY = -tiltY }
 
-        var u = sample.x, v = sample.y
-        if config.leftHanded { u = 1 - u; v = 1 - v }
+        // Tablet mode: say which end is near before the events that carry its pressure and tilt.
+        let tablet = config.tabletEvents && sample.inRange
+        if tablet {
+            let tool: EventOutput.Tool = sample.eraser ? .eraser : .pen
+            if proximity?.tool != tool || proximity?.vendorID != d.vendorID {
+                leaveProximity()
+                output.proximity(enter: true, tool: tool, vendorID: d.vendorID)
+                proximity = (tool, d.vendorID)
+            }
+            let touching = sample.tipSwitch || !sample.hasTipSwitch
+            output.tablet = EventOutput.TabletPoint(
+                x: Int32(u * Double(layout.x.logicalMax)), y: Int32(v * Double(layout.y.logicalMax)),
+                pressure: touching ? max(sample.pressure, 0) : 0, tiltX: tiltX, tiltY: tiltY)
+        } else {
+            output.tablet = nil
+        }
+        processor.process(sample, config: config, now: clock_gettime_nsec_np(CLOCK_UPTIME_RAW), emit: output.post)
+        if !tablet { leaveProximity() }
+
         let state = LiveState(
             inRange: sample.inRange, u: u, v: v, pressure: max(sample.pressure, 0),
             tip: processor.isTouching && !processor.isErasing, eraser: processor.isErasing,
-            lower: sample.inRange && sample.barrel, upper: sample.inRange && sample.secondaryBarrel)
+            lower: sample.inRange && sample.barrel, upper: sample.inRange && sample.secondaryBarrel,
+            tiltX: sample.inRange ? tiltX : 0, tiltY: sample.inRange ? tiltY : 0)
         liveLock.withLock { $0 = state }
+    }
+
+    private func leaveProximity() {
+        guard let (tool, vendorID) = proximity else { return }
+        output.tablet = nil
+        output.proximity(enter: false, tool: tool, vendorID: vendorID)
+        proximity = nil
     }
 
     private func publishTablets() {
@@ -259,9 +296,29 @@ final class TabletDriver: @unchecked Sendable {
 
 /// Posts pointer events into the HID event stream, like a real mouse.
 final class EventOutput {
+    enum Tool { case pen, eraser }
+
+    /// What tablet mode adds to the pointer events made from one pen report.
+    struct TabletPoint {
+        /// Position at the tablet's resolution.
+        var x: Int32
+        var y: Int32
+        /// 0...1; 0 while hovering.
+        var pressure: Double
+        /// Degrees, as in `LiveState`.
+        var tiltX: Double
+        var tiltY: Double
+    }
+
     private let source = CGEventSource(stateID: .hidSystemState)
     let modifiers = KeyboardModifiers()
     private var last: CGPoint?
+    /// Set for each report in tablet mode; nil posts plain mouse events.
+    var tablet: TabletPoint?
+    /// Ties the point events to the proximity events that introduced the pen.
+    private static let deviceID: Int64 = 1
+    /// Tilt that macOS reports as ±1, as on Wacom's own driver.
+    private static let fullTilt = 60.0
 
     func post(_ event: PenEvent) {
         let cg: CGEvent?
@@ -277,7 +334,38 @@ final class EventOutput {
             cg?.setIntegerValueField(.mouseEventClickState, value: Int64(clicks))
         }
         cg?.flags = modifiers.flags
+        if let tablet, let cg { attach(tablet, held: event.held, to: cg) }
         cg?.post(tap: .cghidEventTap)
+    }
+
+    private func attach(_ t: TabletPoint, held: UInt8, to cg: CGEvent) {
+        cg.setIntegerValueField(.mouseEventSubtype, value: Int64(CGEventMouseSubtype.tabletPoint.rawValue))
+        cg.setDoubleValueField(.mouseEventPressure, value: t.pressure)
+        cg.setIntegerValueField(.tabletEventPointX, value: Int64(t.x))
+        cg.setIntegerValueField(.tabletEventPointY, value: Int64(t.y))
+        cg.setIntegerValueField(.tabletEventPointButtons, value: Int64(held))
+        cg.setDoubleValueField(.tabletEventPointPressure, value: t.pressure)
+        cg.setDoubleValueField(.tabletEventTiltX, value: min(max(t.tiltX / Self.fullTilt, -1), 1))
+        // macOS counts Y tilt up the screen; the tablet counts it toward the user.
+        cg.setDoubleValueField(.tabletEventTiltY, value: min(max(-t.tiltY / Self.fullTilt, -1), 1))
+        cg.setIntegerValueField(.tabletEventDeviceID, value: Self.deviceID)
+    }
+
+    /// Tells apps a pen (or its eraser end) came near the tablet or left, so they can pick the
+    /// tool that goes with it.
+    func proximity(enter: Bool, tool: Tool, vendorID: Int) {
+        guard let cg = CGEvent(source: source) else { return }
+        cg.type = .tabletProximity
+        cg.setIntegerValueField(.tabletProximityEventVendorID, value: Int64(vendorID))
+        cg.setIntegerValueField(.tabletProximityEventTabletID, value: 1)
+        cg.setIntegerValueField(.tabletProximityEventPointerID, value: 1)
+        cg.setIntegerValueField(.tabletProximityEventDeviceID, value: Self.deviceID)
+        cg.setIntegerValueField(.tabletProximityEventSystemTabletID, value: 1)
+        // Device ID, absolute X and Y, buttons, X and Y tilt, pressure.
+        cg.setIntegerValueField(.tabletProximityEventCapabilityMask, value: 0x05C7)
+        cg.setIntegerValueField(.tabletProximityEventPointerType, value: tool == .eraser ? 3 : 1)
+        cg.setIntegerValueField(.tabletProximityEventEnterProximity, value: enter ? 1 : 0)
+        cg.post(tap: .cghidEventTap)
     }
 
     private func move(_ p: CGPoint, _ held: UInt8, delta: CGVector?) -> CGEvent? {
@@ -321,7 +409,7 @@ enum Realtime {
         }
         lastResult = result
         if result != KERN_SUCCESS {
-            Logger(subsystem: "express.looop.pendriver", category: "driver").error("Real-time policy failed: \(result)")
+            Logger(subsystem: "express.looop.wdrive", category: "driver").error("Real-time policy failed: \(result)")
         }
     }
 }
