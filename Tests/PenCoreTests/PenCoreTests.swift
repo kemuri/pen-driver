@@ -99,6 +99,7 @@ func decode(_ layout: PenLayout, _ report: [UInt8]) -> PenSample {
         var c = PenConfig()
         c.target = CGRect(x: 0, y: 0, width: 1001, height: 1001)  // 1 normalized unit = 1000 pt
         c.tabletMM = CGSize(width: 1000, height: 1000)  // so 1 mm of pen travel = 1 pt
+        c.edgeBandMM = 0  // mapped straight onto the area
         c.tapRadius = 5
         c.tipThreshold = 0.1
         return c
@@ -198,6 +199,26 @@ func decode(_ layout: PenLayout, _ report: [UInt8]) -> PenSample {
         ], config: c)
         #expect(e == [.move(CGPoint(x: 500, y: 800), held: 0), .move(CGPoint(x: 500, y: 1000), held: 0),
                       .move(CGPoint(x: 502.5, y: 1000), held: 0)])
+    }
+
+    @Test func restsOnTheEdgeOfAWholeTabletArea() {
+        var c = config
+        c.edgeBandMM = 20  // 20 pt here
+        c.edgeRestMM = 5
+        var p = PenProcessor()
+        let e = run(&p, [
+            (PenSample(x: 0.5, y: 0.985), 0),     // in the rim of the tablet: lands on the bottom edge
+            (PenSample(x: 0.503, y: 0.99), 10),   // trembling sideways and up and down
+            (PenSample(x: 0.498, y: 0.987), 20),
+        ], config: c)
+        #expect(e == [.move(CGPoint(x: 500, y: 1000), held: 0)])
+    }
+
+    @Test func rimBandLeavesRoomAlreadyPastTheArea() {
+        var c = config
+        c.edgeBandMM = 20
+        c.area = CGRect(x: 0.1, y: 0.1, width: 0.8, height: 0.8)
+        #expect(PenProcessor.reach(c) == c.area)
     }
 
     @Test func edgeIgnoresSidewaysJitter() {

@@ -95,6 +95,9 @@ public struct PenConfig: Equatable, Sendable {
     public var doubleClickNs: UInt64 = 500_000_000
     /// Past a screen edge the pointer rests on it; sideways hover jitter under this (mm) is ignored.
     public var edgeRestMM = 0.5
+    /// Where the area ends at the rim of the tablet there'd be nothing past its edge, so this much
+    /// of the rim (mm) counts as past it: the pen can get the pointer to rest on the screen edge.
+    public var edgeBandMM = 2.0
     public var upper: ButtonAction = .rightClick
     public var lower: ButtonAction = .middleClick
     public var eraser: ButtonAction = .leftClick
@@ -153,10 +156,20 @@ public struct PenProcessor {
         c.leftHanded ? (1 - s.x, 1 - s.y) : (s.x, s.y)
     }
 
+    /// The part of the tablet that maps onto the target: the area, drawn in from the rim by what's
+    /// missing of `edgeBandMM` past each of its edges.
+    public static func reach(_ c: PenConfig) -> CGRect {
+        let bandX = c.edgeBandMM / max(c.tabletMM.width, 1), bandY = c.edgeBandMM / max(c.tabletMM.height, 1)
+        let a = c.area
+        let left = max(bandX - a.minX, 0), right = max(bandX - (1 - a.maxX), 0)
+        let top = max(bandY - a.minY, 0), bottom = max(bandY - (1 - a.maxY), 0)
+        return CGRect(x: a.minX + left, y: a.minY + top, width: a.width - left - right, height: a.height - top - bottom)
+    }
+
     /// Point in layout space for a tablet position that is already oriented (left-handed applied).
     /// Unclamped, positions outside the area map past the edges of the target.
     public static func layoutPoint(u: Double, v: Double, _ c: PenConfig, clamped: Bool = true) -> CGPoint {
-        let a = c.area
+        let a = reach(c)
         var sx = (u - a.minX) / max(a.width, 1e-6)
         var sy = (v - a.minY) / max(a.height, 1e-6)
         if clamped {
