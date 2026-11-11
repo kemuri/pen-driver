@@ -12,8 +12,8 @@ Applications. It's signed with a Developer ID and notarized by Apple.
 
 ## Build
 
-    ./build.sh             # → build/wdrive.app
-    ./build.sh --install   # also installs it to /Applications and quits the running copy
+    ./build.sh             # → build/wdrive.app, installed to /Applications (a running copy restarts from there)
+    ./build.sh --no-install
     swift test             # descriptor parser, mapping, click guard, display snapping
 
 Requires macOS 15+ and Xcode. `build.sh` signs with your Developer ID / Apple Development

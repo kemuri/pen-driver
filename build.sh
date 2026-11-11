@@ -1,15 +1,16 @@
 #!/bin/zsh
-# Builds "build/wdrive.app".
-#   --install   also copy it to /Applications (quitting the running copy)
-#   --release   universal (Apple silicon + Intel), Developer ID, hardened runtime: ready to notarize
+# Builds "build/wdrive.app" and installs it to /Applications, the copy that runs (see
+# Scripts/install.sh).
+#   --release      universal (Apple silicon + Intel), Developer ID, hardened runtime: ready to notarize
+#   --no-install   leave it in build/
 set -euo pipefail
 cd "${0:A:h}"
 
-RELEASE=0; INSTALL=0
+RELEASE=0; INSTALL=1
 for arg in "$@"; do
   case "$arg" in
     --release) RELEASE=1 ;;
-    --install) INSTALL=1 ;;
+    --no-install) INSTALL=0 ;;
     *) echo "Unknown option: $arg" >&2; exit 2 ;;
   esac
 done
@@ -42,9 +43,4 @@ else
 fi
 echo "Built $APP (signed: ${IDENTITY:-ad-hoc})"
 
-if (( INSTALL )); then
-  pkill -x wdrive 2>/dev/null && sleep 0.5 || true
-  rm -rf "/Applications/wdrive.app"
-  cp -R "$APP" /Applications/
-  echo "Installed to /Applications/wdrive.app"
-fi
+if (( INSTALL )); then Scripts/install.sh "$APP"; fi

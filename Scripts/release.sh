@@ -1,5 +1,6 @@
 #!/bin/zsh
-# Builds a notarized disk image: build/wdrive-<version>.dmg (version from Resources/Info.plist).
+# Builds a notarized disk image: build/wdrive-<version>.dmg (version from Resources/Info.plist),
+# and installs the app in it to /Applications.
 #   --publish        also create a draft GitHub release v<version> with the DMG attached (needs gh)
 #   --no-notarize    stop before notarizing, to check the build and the disk image locally
 #
@@ -46,7 +47,7 @@ notarize() {
   fi
 }
 
-./build.sh --release
+./build.sh --release --no-install
 IDENTITY="$(codesign -dvv "$APP" 2>&1 | sed -n 's/^Authority=\(Developer ID Application: .*\)$/\1/p')"
 
 # The app itself gets a ticket too, so it also passes Gatekeeper offline once copied out of the image.
@@ -72,6 +73,7 @@ if (( NOTARIZE )); then
   spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG"
 fi
 echo "Built $DMG"
+Scripts/install.sh "$APP"
 
 if (( PUBLISH )); then
   gh release create "$TAG" "$DMG" --draft --target "$(git rev-parse HEAD)" \
